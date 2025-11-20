@@ -255,8 +255,237 @@ Com a aplicação rodando, você pode acessar:
 
 Através do Swagger é possível:
 
+
+## 🌱 Seeds de Desenvolvimento (data.sql)
+
+O projeto inclui um arquivo `data.sql` que popula automaticamente o banco PostgreSQL com dados iniciais sempre que a aplicação sobe no profile **postgres**.
+
+Esses dados permitem testar imediatamente todas as funcionalidades do sistema:
+
+### 👥 Times cadastrados
+- LDF — Leões da Fé  
+- ADR — Águias do Reino  
+- FJUJ — FJU Jaçanã  
+- TEM — FJU Templo  
+- GDA — Guardiões da Aliança  
+- SDN — Santos do Norte  
+
+### 🧍‍♂️ Jogadores por time
+Cada time possui **4 jogadores**, todos criados automaticamente via `MERGE` (evitando duplicação).
+
+### 🏆 Torneios
+São gerados dois torneios padrão:
+
+1. **Campeonato Interno 2025**  
+   - Pontos corridos  
+   - Com turno e returno  
+   - Times: LDF, ADR, FJUJ, TEM  
+
+2. **Copa da Amizade 2025**  
+   - Pontos corridos  
+   - Sem returno  
+   - Times: GDA, SDN, LDF, ADR  
+
+### 📝 Inscrições (tournament_teams)
+O vínculo entre times e torneios é totalmente preenchido e garantido por SELECT + MERGE, evitando IDs fixos.
+
+### 🎯 Objetivo do data.sql
+- Permitir testes imediatos sem precisar cadastrar nada manualmente  
+- Garante ambiente consistente  
+- Facilita testes dos endpoints  
+- Permite gerar tabela/classificação instantaneamente  
+
+
 - Explorar todos os endpoints disponíveis  
 - Visualizar os modelos de requisição e resposta  
 - Testar chamadas diretamente pelo navegador (sem Postman)
 
 
+## 🔗 Principais Endpoints
+
+Abaixo estão alguns dos endpoints mais importantes expostos pela API do **Church League Championship**.
+
+### 🏟️ Torneios (`/api/tournaments`)
+
+```http
+GET    /api/tournaments
+Retorna a lista de torneios cadastrados.
+
+http
+Copy code
+GET    /api/tournaments/{id}
+Retorna os detalhes de um torneio específico.
+
+http
+Copy code
+GET    /api/tournaments/{id}/standings
+Retorna a classificação do torneio, com pontos, vitórias, empates, derrotas, saldo de gols etc.
+
+http
+Copy code
+GET    /api/tournaments/{id}/scorers
+Retorna a artilharia do torneio, listando jogadores e total de gols.
+
+⚽ Partidas (/api/matches)
+http
+Copy code
+POST   /api/matches/generate/{tournamentId}?hasReturn=true|false
+Gera a tabela de jogos do torneio informado.
+Se hasReturn=true, gera turno e returno.
+
+http
+Copy code
+GET    /api/matches?tournamentId={id}
+Lista todas as partidas de um torneio.
+
+http
+Copy code
+GET    /api/matches?tournamentId={id}&status=FINALIZADO
+Lista somente partidas finalizadas.
+
+http
+Copy code
+PUT    /api/matches/{id}/result-with-scorers
+Atualiza o resultado de uma partida, incluindo os artilheiros (gols por jogador).
+
+http
+Copy code
+PUT    /api/matches/{id}/wo?winnerSide=HOME|AWAY
+Aplica WO para mandante (HOME) ou visitante (AWAY), usando o placar padrão configurado no torneio.
+
+🧍 Jogadores (/api/players)
+http
+Copy code
+GET    /api/players/team/{teamId}
+Lista os jogadores de um time.
+
+http
+Copy code
+POST   /api/players/team/{teamId}
+Cadastra um novo jogador vinculado a um time.
+
+http
+Copy code
+POST   /api/players/{playerId}/goal
+Incrementa o número de gols de um jogador (útil para testes).
+
+http
+Copy code
+GET    /api/players/ranking
+Retorna o ranking geral de artilheiros.
+
+🏅 Times (/api/teams)
+http
+Copy code
+GET    /api/teams
+Lista todos os times cadastrados.
+
+http
+Copy code
+GET    /api/teams/{id}
+Retorna os detalhes de um time específico.
+
+http
+Copy code
+POST   /api/teams
+Cadastra um novo time.
+
+http
+Copy code
+PUT    /api/teams/{id}
+Atualiza os dados de um time existente.
+```
+
+---
+
+# ✅ BLOCO 12 — FLUXOS INTERNOS (REGRAS DO CAMPEONATO)
+
+## 🔥 Fluxos Internos do Sistema
+
+Esta seção descreve, em alto nível, algumas das regras internas do sistema.
+
+### 🔄 Geração de Partidas
+
+1. Recebe o `tournamentId` e se haverá returno (`hasReturn`).
+2. Busca todos os times inscritos no torneio.
+3. Gera todas as combinações únicas de confrontos entre os times.
+4. Para cada confronto:
+   - Cria uma partida de **ida** (mandante x visitante).
+   - Se `hasReturn = true`, cria também uma partida de **volta** (inverte mandante/visitante).
+5. Salva todas as partidas no banco.
+6. Retorna a lista de jogos gerados.
+
+---
+
+### 📝 Atualização de Resultado com Artilheiros
+
+Quando o endpoint `PUT /api/matches/{id}/result-with-scorers` é chamado:
+
+1. Busca a partida pelo ID.
+2. Valida se a partida existe e se o status permite alteração.
+3. Atualiza o placar (gols do mandante e visitante).
+4. Para cada artilheiro informado:
+   - Registra eventos de gol (`GoalEvent`).
+   - Atualiza o total de gols do jogador (`player.goals`).
+5. Recalcula saldo, vitórias, empates, derrotas e pontos dos times.
+6. Atualiza a classificação do torneio.
+7. Marca a partida como `FINALIZADO`.
+
+---
+
+### 🛑 Aplicação de WO
+
+Fluxo do endpoint `PUT /api/matches/{id}/wo?winnerSide=HOME|AWAY`:
+
+1. Busca a partida pelo ID.
+2. Lê a configuração de WO do torneio (`wo_home_goals`, `wo_away_goals`).
+3. De acordo com `winnerSide`:
+   - Se `HOME`: aplica gols de WO para o mandante.
+   - Se `AWAY`: aplica gols de WO para o visitante.
+4. Atualiza o status da partida para `WO`.
+5. Atualiza a classificação do torneio normalmente (como se fosse uma vitória).
+
+## 🗺️ Roadmap
+
+### ✅ Concluído
+
+- Backend em **Java 17 + Spring Boot 3.5**
+- Banco de dados em **PostgreSQL 16** rodando em **Docker**
+- Mapeamento JPA completo (Team, Player, Tournament, Match, GoalEvent)
+- Geração de tabela de jogos (ida / ida+volta)
+- Registro de resultados com artilheiros
+- Cálculo de classificação e artilharia
+- Seeds automáticas com `data.sql`
+- Documentação via **Swagger / OpenAPI**
+
+---
+
+### 🔄 Em Desenvolvimento
+
+- Painel administrativo em **Angular** para:
+  - Visualizar torneios, partidas e tabela
+  - Lançar resultados
+  - Gerenciar jogadores e times
+
+---
+
+### 🔮 Planejado
+
+- Autenticação e autorização (JWT, perfis ADMIN / USER)
+- Dashboard público para acompanhar o campeonato
+- Exportação de tabela e rodadas em PDF
+- Estatísticas avançadas:
+  - Fair play
+  - Melhor ataque / melhor defesa
+  - Aproveitamento por time e jogador
+
+---
+
+## 👤 Autor
+
+**Lucas Bezerra**  
+
+Desenvolvedor Java / Angular e criador do **Church League Championship**.  
+Projeto desenvolvido inicialmente para campeonatos internos de igreja, evoluindo para um backend completo com foco em boas práticas, testes e expansão futura para front-end web.
+
+---
